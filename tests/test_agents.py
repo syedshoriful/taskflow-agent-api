@@ -41,3 +41,65 @@ def test_get_agent_not_found():
     response = client.get("/agents/nonexistent-id")
     assert response.status_code == 200
     assert response.json()["error"] == "Agent not found"
+
+def test_get_agent():
+    # First create an agent
+    create_response = client.post("/agents", json={
+        "tenant_id": "acme",
+        "name": "get-test-agent",
+        "image": "nginx:latest",
+        "status": "pending",
+        "config": {}
+    })
+    agent_id = create_response.json()["id"]
+
+    # Then get it by ID
+    response = client.get(f"/agents/{agent_id}")
+    assert response.status_code == 200
+    assert response.json()["id"] == agent_id
+    assert response.json()["name"] == "get-test-agent"
+
+
+def test_update_agent():
+    # First create an agent
+    create_response = client.post("/agents", json={
+        "tenant_id": "acme",
+        "name": "update-test-agent",
+        "image": "nginx:latest",
+        "status": "pending",
+        "config": {}
+    })
+    agent_id = create_response.json()["id"]
+
+    # Then update it
+    response = client.put(f"/agents/{agent_id}", json={
+        "tenant_id": "acme",
+        "name": "updated-agent",
+        "image": "nginx:latest",
+        "status": "running",
+        "config": {"memory": "512m"}
+    })
+    assert response.status_code == 200
+    assert response.json()["name"] == "updated-agent"
+    assert response.json()["status"] == "running"
+
+
+def test_delete_agent():
+    # First create an agent
+    create_response = client.post("/agents", json={
+        "tenant_id": "acme",
+        "name": "delete-test-agent",
+        "image": "nginx:latest",
+        "status": "pending",
+        "config": {}
+    })
+    agent_id = create_response.json()["id"]
+
+    # Then delete it
+    response = client.delete(f"/agents/{agent_id}")
+    assert response.status_code == 200
+    assert response.json()["message"] == "Agent deleted"
+
+    # Verify it's gone
+    get_response = client.get(f"/agents/{agent_id}")
+    assert get_response.json()["error"] == "Agent not found"
