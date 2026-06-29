@@ -7,10 +7,13 @@ from database import SessionLocal, engine
 from models import AgentDB, User, Base
 from sqlalchemy.orm import Session
 from auth import hash_password, verify_password, create_access_token, verify_access_token
-
+import redis
+import json
 app = FastAPI()
 
 Base.metadata.create_all(bind=engine)
+# Redis client
+redis_client = redis.Redis(host='localhost', port=6379, db=0, decode_responses=True)
 
 def get_db():
     db = SessionLocal()
@@ -47,6 +50,26 @@ class TokenResponse(BaseModel):
     token_type: str
     tenant_id: str
 
+def cache_agent_list(tenant_id: str, agents: list) -> None:
+    """Cache agent list in Redis with 5-minute TTL."""
+    cache_key = f"agents:{tenant_id}"
+    cache_value = json.dumps([{
+        "id": a.id,
+        "tenant_id": a.tenant_id,
+        "name": a.name,
+        "image": a.image,
+        "status": a.status,
+        "config": a.config,
+        "created_at": a.created_at
+    } for a in agents])
+    redis_client.set(cache_key, cache_value, ex=300)  # 5 min TTL
+    
+@app.get("/agents/{agent_id}")
+async def get_agent(agent_id: str, db: Session = Depends(get_db)):
+    db_agent = db.query(AgentDB).filter(AgentDB.id == agent_id).first()
+    if db_agent is None:
+        return {"error": "Agent not found"}
+    return db_agent
 
 # Agent CRUD endpoints
 @app.post("/agents")
@@ -63,21 +86,35 @@ async def create_agent(agent: Agent, db: Session = Depends(get_db)):
     db.add(db_agent)
     db.commit()
     db.refresh(db_agent)
+    
+    # Invalidate cache for this tenant
+    cache_key = f"agents:{agent.tenant_id}"
+    redis_client.delete(cache_key)
+    
     return db_agent
+
 
 
 @app.get("/agents")
-async def list_agents(db: Session = Depends(get_db)):
-    return db.query(AgentDB).all()
-
-
-@app.get("/agents/{agent_id}")
-async def get_agent(agent_id: str, db: Session = Depends(get_db)):
-    db_agent = db.query(AgentDB).filter(AgentDB.id == agent_id).first()
-    if db_agent is None:
-        return {"error": "Agent not found"}
-    return db_agent
-
+async def list_agents(tenant_id: str, db: Session = Depends(get_db)):
+    cache_key = f"agents:{tenant_id}"
+    
+    # Check Redis cache first
+    cached = redis_client.get(cache_key)
+    
+    if cached:
+        return json.loads(cached)
+    
+    # Cache miss: query DB
+    agents = db.query(AgentDB).filter(AgentDB.tenant_id == tenant_id).all()
+    
+    
+    # Cache the result
+    if agents:
+        cache_agent_list(tenant_id, agents)
+    
+    
+    return agents
 
 @app.put("/agents/{agent_id}")
 async def update_agent(agent_id: str, agent: Agent, db: Session = Depends(get_db)):
@@ -90,6 +127,10 @@ async def update_agent(agent_id: str, agent: Agent, db: Session = Depends(get_db
     db_agent.config = agent.config
     db.commit()
     db.refresh(db_agent)
+
+    # Invalidate cache for this tenantß
+    redis_client.delete(f"agents:{db_agent.tenant_id}")
+
     return db_agent
 
 
@@ -100,7 +141,12 @@ async def delete_agent(agent_id: str, db: Session = Depends(get_db)):
         return {"error": "Agent not found"}
     db.delete(db_agent)
     db.commit()
+    
+    # Invalidate cache for this tenant
+    redis_client.delete(f"agents:{db_agent.tenant_id}")
+    
     return {"message": "Agent deleted"}
+    
 
 
 # Authentication endpoints
