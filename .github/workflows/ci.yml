@@ -64,6 +64,7 @@ jobs:
       - name: Run tests
         env:
           REDIS_HOST: localhost
+          RABBITMQ_HOST: localhost
         run: |
           pip install pytest httpx
           pytest tests/ -v
