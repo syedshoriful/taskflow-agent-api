@@ -9,12 +9,17 @@ from sqlalchemy.orm import Session
 from auth import hash_password, verify_password, create_access_token, verify_access_token
 import redis
 import json
+import os
 from celery_worker import validate_agent_config, notify_agent_ready
 app = FastAPI()
 
 Base.metadata.create_all(bind=engine)
 # Redis client
-redis_client = redis.Redis(host='redis', port=6379, db=0, decode_responses=True)
+
+
+redis_host = os.getenv('REDIS_HOST', 'redis')
+redis_client = redis.Redis(host=redis_host, port=6379, db=0, decode_responses=True)
+
 
 def get_db():
     db = SessionLocal()

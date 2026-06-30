@@ -62,6 +62,8 @@ jobs:
         run: pip install -r requirements.txt
 
       - name: Run tests
+        env:
+          REDIS_HOST: localhost
         run: |
           pip install pytest httpx
           pytest tests/ -v
