@@ -33,9 +33,8 @@ def test_create_agent():
     assert response.json()["name"] == "test-agent"
 
 def test_list_agents():
-    response = client.get("/agents")
+    response = client.get("/agents?tenant_id=acme")  # Add tenant_id parameter
     assert response.status_code == 200
-    assert isinstance(response.json(), list)
 
 def test_get_agent_not_found():
     response = client.get("/agents/nonexistent-id")

@@ -9,11 +9,12 @@ from sqlalchemy.orm import Session
 from auth import hash_password, verify_password, create_access_token, verify_access_token
 import redis
 import json
+from celery_worker import validate_agent_config, notify_agent_ready
 app = FastAPI()
 
 Base.metadata.create_all(bind=engine)
 # Redis client
-redis_client = redis.Redis(host='localhost', port=6379, db=0, decode_responses=True)
+redis_client = redis.Redis(host='redis', port=6379, db=0, decode_responses=True)
 
 def get_db():
     db = SessionLocal()
@@ -63,7 +64,7 @@ def cache_agent_list(tenant_id: str, agents: list) -> None:
         "created_at": a.created_at
     } for a in agents])
     redis_client.set(cache_key, cache_value, ex=300)  # 5 min TTL
-    
+
 @app.get("/agents/{agent_id}")
 async def get_agent(agent_id: str, db: Session = Depends(get_db)):
     db_agent = db.query(AgentDB).filter(AgentDB.id == agent_id).first()
@@ -90,6 +91,10 @@ async def create_agent(agent: Agent, db: Session = Depends(get_db)):
     # Invalidate cache for this tenant
     cache_key = f"agents:{agent.tenant_id}"
     redis_client.delete(cache_key)
+    
+    # Send Celery tasks to run in background
+    validate_agent_config.delay(db_agent.id, db_agent.tenant_id)
+    notify_agent_ready.delay(db_agent.id, db_agent.tenant_id)
     
     return db_agent
 
