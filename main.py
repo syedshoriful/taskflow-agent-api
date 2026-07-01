@@ -10,8 +10,58 @@ from auth import hash_password, verify_password, create_access_token, verify_acc
 import redis
 import json
 import os
+import logging
 from celery_worker import validate_agent_config, notify_agent_ready
+from contextvars import ContextVar
+from fastapi import Request
+
+# Request-scoped context variables
+request_id_var: ContextVar[str] = ContextVar('request_id', default='unknown')
+tenant_id_var: ContextVar[str] = ContextVar('tenant_id', default='unknown')
+
+# Configure structured logging
+logging.basicConfig(level=logging.INFO, format='%(message)s')
+logger = logging.getLogger(__name__)
+
+
 app = FastAPI()
+
+from fastapi import Request
+
+@app.middleware("http")
+async def add_request_context(request: Request, call_next):
+    # Generate unique request ID
+    req_id = str(uuid.uuid4())[:8]
+    
+    # Extract tenant_id from query params (for testing)
+    # In production, extract from JWT token
+    tenant_id = request.query_params.get('tenant_id', 'unknown')
+    
+    # Set context variables
+    request_id_var.set(req_id)
+    tenant_id_var.set(tenant_id)
+    
+    # Log request received (structured JSON)
+    logger.info(json.dumps({
+        "event": "request_received",
+        "request_id": req_id,
+        "tenant_id": tenant_id,
+        "method": request.method,
+        "path": request.url.path
+    }))
+    
+    response = await call_next(request)
+    return response
+
+def log_with_context(event: str, **kwargs):
+    """Log with request_id and tenant_id automatically included"""
+    log_data = {
+        "event": event,
+        "request_id": request_id_var.get(),
+        "tenant_id": tenant_id_var.get(),
+    }
+    log_data.update(kwargs)
+    logger.info(json.dumps(log_data))
 
 Base.metadata.create_all(bind=engine)
 # Redis client
@@ -80,9 +130,14 @@ async def get_agent(agent_id: str, db: Session = Depends(get_db)):
 # Agent CRUD endpoints
 @app.post("/agents")
 async def create_agent(agent: Agent, db: Session = Depends(get_db)):
+    tenant_id = tenant_id_var.get()
+    agent_id = str(uuid.uuid4())
+    
+    log_with_context("agent_creation_started", agent_name=agent.name, agent_id=agent_id)
+    
     db_agent = AgentDB(
-        id=str(uuid.uuid4()),
-        tenant_id=agent.tenant_id,
+        id=agent_id,
+        tenant_id=tenant_id,
         name=agent.name,
         image=agent.image,
         status=agent.status,
@@ -93,13 +148,17 @@ async def create_agent(agent: Agent, db: Session = Depends(get_db)):
     db.commit()
     db.refresh(db_agent)
     
+    log_with_context("agent_created_in_db", agent_id=agent_id)
+    
     # Invalidate cache for this tenant
-    cache_key = f"agents:{agent.tenant_id}"
+    cache_key = f"agents:{tenant_id}"
     redis_client.delete(cache_key)
     
-    # Send Celery tasks to run in background
-    validate_agent_config.delay(db_agent.id, db_agent.tenant_id)
-    notify_agent_ready.delay(db_agent.id, db_agent.tenant_id)
+    # Send Celery tasks
+    validate_agent_config.delay(agent_id, tenant_id)
+    notify_agent_ready.delay(agent_id, tenant_id)
+    
+    log_with_context("agent_creation_complete", agent_id=agent_id)
     
     return db_agent
 
