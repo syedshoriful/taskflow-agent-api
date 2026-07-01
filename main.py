@@ -130,7 +130,8 @@ async def get_agent(agent_id: str, db: Session = Depends(get_db)):
 # Agent CRUD endpoints
 @app.post("/agents")
 async def create_agent(agent: Agent, db: Session = Depends(get_db)):
-    tenant_id = tenant_id_var.get()
+    tenant_id = agent.tenant_id  # Source from request body, not context
+    tenant_id_var.set(tenant_id)  # Update context so logs use correct tenant_id
     agent_id = str(uuid.uuid4())
     
     log_with_context("agent_creation_started", agent_name=agent.name, agent_id=agent_id)
@@ -161,7 +162,6 @@ async def create_agent(agent: Agent, db: Session = Depends(get_db)):
     log_with_context("agent_creation_complete", agent_id=agent_id)
     
     return db_agent
-
 
 
 @app.get("/agents")
